@@ -1,12 +1,3 @@
-#!/bin/bash
-## Torque Configuration
-#PBS -l walltime=24:00:00
-#PBS -l mem=50gb
-#PBS -l nodes=1:ppn=10
-#PBS -q batch
-#PBS -N Rsem_prepare
-#PBS -j oe
-
 GENECODE_VERSION=28
 GRCH_VERSION=38
 
