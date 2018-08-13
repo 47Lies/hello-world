@@ -1,0 +1,5 @@
+RAW_GLOBAL_GIR : "/data/users/ltaing/DATA_TMP/ltaing/MaxQuant_2Tumeurs/RAW"
+MaxQuant:
+ FASTA_DATABASE : "/data/users/ltaing/DATA_TMP/ltaing/Tumeurs_M5/uniprot_homo_sapiens_isoforms_20180518.fasta"
+ Threads :  "24"
+ WorkingDirectory : "/data/users/ltaing/DATA_TMP/ltaing/MaxQuant_2Tumeurs"
