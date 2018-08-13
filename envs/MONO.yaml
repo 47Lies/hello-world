@@ -1,0 +1,7 @@
+# This file may be used to create an environment using:
+# $ conda create --name <env> --file <this file>
+# platform: linux-64
+@EXPLICIT
+https://repo.anaconda.com/pkgs/main/linux-64/libgcc-ng-7.2.0-hdf63c60_3.tar.bz2
+https://repo.anaconda.com/pkgs/main/linux-64/libstdcxx-ng-7.2.0-hdf63c60_3.tar.bz2
+https://conda.anaconda.org/conda-forge/linux-64/mono-4.8.1.0-hfc679d8_1.tar.bz2
