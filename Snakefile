@@ -1,6 +1,7 @@
 from lxml import etree
 from bs4 import BeautifulSoup
 from urllib import request
+from ftplib import FTP
 import os
 import re
 os.environ['LANG'] = "en_US.UTF-8"
@@ -8,6 +9,8 @@ configfile: "config.yaml"
 MQ = "/data/users/ltaing/ProteoGenomics/MaxQuant/Version1.6.2.6/bin/MaxQuantCmd.exe"
 MaxQuantWorkingDirectory=config["MaxQuant"]["WorkingDirectory"]
 Threads=config["MaxQuant"]["Threads"]
+
+Strawberry=config["Strawberry"]["StrawPath"]
 
 if "PBS_JOBID" in os.environ:
 	ScratchMQPAR_Name=MaxQuantWorkingDirectory+"/mqpar"+os.environ["PBS_JOBID"]+".xml"
@@ -44,12 +47,10 @@ Hisat2ALN_DIR="ALN_FILES/HISAT2_"+GenomeVersion+"_x_"+GencodeVersion+"/"
 
 FQ_DIR="/bioinfo/users/ltaing/ProteoGenomics/data/2000553/"
 
-
-
 SAMPLES=["MB01","MB02","MB25"]
 
 rule all:
-	input: expand(Hisat2ALN_DIR+"{Sample}.filtered.sorted.bam",Sample=SAMPLES)
+	input: "blastp.outfmt6"
 
 rule GetGTF:
 	output: GTF
@@ -61,11 +62,17 @@ rule GetGTF:
 
 rule GetGenome:
 	output: Genome
-	shell:
-		"mkdir --parents {RessourcesODIR} &&\
+	shell: "mkdir --parents {RessourcesODIR} &&\
  wget \"ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_{GencodeVersion}/{GenomeVersion}.genome.fa.gz\"\
  --output-document {Genome}.gz &&\
  gunzip {Genome}.gz"
+
+rule BuildGenomeIndex:
+	input: Genome
+	output: Genome+".fai"
+	conda: "envs/samtools.yaml"
+	threads: 1
+	shell: "samtools faidx -Sb {Genome}"
 
 rule BuildHST2SpliceSite:
 	input: GTF
@@ -89,32 +96,93 @@ rule Hisat2Map:
 	conda: "envs/Hisat2.yaml"
 	threads: 10
 	shell: "mkdir --parents {Hisat2ALN_DIR};\
-hisat2 -x {Hisat2IndexRoot} -q --time --threads 10 \
+ hisat2 -x {Hisat2IndexRoot} -q --time --threads 10 \
  -1 {input.R1} -2 {input.R2} \
  --known-splicesite-infile {input.splicesite} \
  --novel-splicesite-outfile  {output.NSS} \
  --dta-cufflinks \
  -S {output.SAM}"
- 
+
 rule SamToBam:
 	input: SAM=Hisat2ALN_DIR+"{Sample}.sam"
 	output: BAM=Hisat2ALN_DIR+"{Sample}.bam"
 	conda: "envs/samtools.yaml"
 	threads: 1
 	shell: "samtools view -Sb {input.SAM} > {output.BAM}"
-	
+
 rule SamToSortedBam:
 	input: BAM=Hisat2ALN_DIR+"{Sample}.bam"
 	output: SBAM=Hisat2ALN_DIR+"{Sample}.sorted.bam"
 	conda: "envs/samtools.yaml"
 	threads: 10
-	shell: "samtools sort --threads {threads} {input.BAM}-o {output.SBAM}"
+	shell: "samtools sort --threads {threads} -T {output.SBAM}.temp -o {output.SBAM} {input.BAM}"
 
 rule FilterBamAndIndex:
 	input: SBAM=Hisat2ALN_DIR+"{Sample}.sorted.bam"
 	output: FSBAM=Hisat2ALN_DIR+"{Sample}.filtered.sorted.bam"
 	shell: "samtools view -b -h -f 3 -F 4 -F 8 -F 256 -F 512 -F 2048 -q 60 {input.SBAM} > {output.FSBAM};\
-samtools index {output.FSBAM}"
+ samtools index {output.FSBAM}"
+
+rule IsoformsWithStrawberry:
+	input: FSBAM=Hisat2ALN_DIR+"{Sample}.filtered.sorted.bam"
+	output: "STRAWBERRY/{Sample}_strawberry_with_Ref.gtf"
+	threads: 1
+	shell: "mkdir --parents STRAWBERRY/{wildcards.Sample}/ ;\
+ {Strawberry} --verbose --min-mapping-qual 60 -g {GTF} \
+ --output-dir STRAWBERRY/{wildcards.Sample}/ {input.FSBAM} ;\
+ mv STRAWBERRY/{wildcards.Sample}/assembled_transcripts.gtf {output};\
+ rm --recursive --force STRAWBERRY/{wildcards.Sample}/"
+
+rule MergeGTF:
+	input: expand("STRAWBERRY/{Sample}_strawberry_with_Ref.gtf",Sample=SAMPLES)
+	output: "STRAWBERRY/merge.ChrsOnly.gtf"
+	conda: "envs/stringtie.yaml"
+	shell: "stringtie \
+ --merge \
+ -o STRAWBERRY/merge.gtf \
+ -c 2.5 \
+ -m 300 \
+ -T 1 \
+ -f .001 \
+ -i \
+ {input};\
+ grep -e '^\#' STRAWBERRY/merge.gtf > STRAWBERRY/merge.ChrsOnly.gtf;\
+ grep -e '^chr' STRAWBERRY/merge.gtf >> STRAWBERRY/merge.ChrsOnly.gtf"
+
+rule GTFToCDNA:
+	input: GTF="STRAWBERRY/merge.ChrsOnly.gtf",GENOME=Genome,INDEX=Genome+".fai"
+	output: "STRAWBERRY/merge.ChrsOnly.Cdna.fasta"
+	conda: "envs/gffread.yaml"
+	shell: "gffread {input.GTF} -w {output} -g {input.GENOME} "
+
+rule LongOrfs:
+	input: "STRAWBERRY/merge.ChrsOnly.Cdna.fasta"
+	output: "STRAWBERRY/transdecoder/longest_orfs.pep"
+	shell: "TransDecoder.LongOrfs -t STRAWBERRY/merge.ChrsOnly.fasta;\
+ mkdir --parents STRAWBERRY/transdecoder/;\
+ mv merge.ChrsOnly.fasta.transdecoder_dir/* STRAWBERRY/transdecoder/.;\
+ rm --recursive --force merge.ChrsOnly.fasta.transdecoder_dir;\
+ rm --recursive --force merge.ChrsOnly.fasta.transdecoder_dir.__checkpoints_longorfs;"
+
+rule makeblastdb:
+	input: "RESSOURCES/UNIPROT/UP000005640_9606.fasta"
+	output: ["RESSOURCES/UNIPROT/UP000005640_9606.fasta.pin","RESSOURCES/UNIPROT/UP000005640_9606.fasta.phr","RESSOURCES/UNIPROT/UP000005640_9606.fasta.psq"]
+	shell: "makeblastdb -in {input} -dbtype prot"
+
+rule blastp:
+	input: pep="STRAWBERRY/transdecoder/longest_orfs.pep", blastdb=["RESSOURCES/UNIPROT/UP000005640_9606.fasta.pin","RESSOURCES/UNIPROT/UP000005640_9606.fasta.phr","RESSOURCES/UNIPROT/UP000005640_9606.fasta.psq"]
+	output: "blastp.outfmt6"
+	shell: "blastp \
+ -num_threads 2 \
+ -query {input.pep} \
+ -db RESSOURCES/UNIPROT/UP000005640_9606.fasta \
+ -max_target_seqs 1 \
+ -outfmt 6 \
+ -evalue 1e-5 \
+ > {output}"
+
+
+
 
 rule MakeTemplate:
 	output:
